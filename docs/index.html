@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<title>Webhook Router — 1 webhook, N destinos</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Roteador fan-out de webhooks para Cloudflare Workers: receba 1 webhook e replique para quantos destinos quiser, com retry automático, assinatura HMAC, filtros por destino e painel em português. Gratuito e open source.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c6cff'/%3E%3Cstop offset='1' stop-color='%2334d399'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='24' cy='50' r='11' fill='url(%23g)'/%3E%3Ccircle cx='76' cy='22' r='9' fill='%237c6cff'/%3E%3Ccircle cx='76' cy='50' r='9' fill='%239285ff'/%3E%3Ccircle cx='76' cy='78' r='9' fill='%2334d399'/%3E%3Cpath d='M33 50 H52 M52 50 L68 24 M52 50 H68 M52 50 L68 76' stroke='url(%23g)' stroke-width='6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+
+<style>
+  :root{
+    --bg: #0a0b0f;
+    --bg-raised: #10121a;
+    --bg-card: #151824;
+    --line: #262b3b;
+    --line-soft: #1d2130;
+    --ink: #eef0f6;
+    --ink-dim: #9aa0b4;
+    --ink-faint: #5f6578;
+    --accent: #7c6cff;
+    --accent-strong: #9285ff;
+    --accent-dim: #5c4fd4;
+    --green: #34d399;
+    --green-dim: #22a877;
+    --danger: #f66a6a;
+    --radius: 14px;
+    --maxw: 1080px;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  *{ box-sizing: border-box; }
+  html{ scroll-behavior: smooth; }
+
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    background-image:
+      radial-gradient(1200px 600px at 15% -10%, rgba(124,108,255,.09), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(52,211,153,.07), transparent 55%);
+    background-repeat: no-repeat;
+  }
+
+  ::selection{ background: rgba(124,108,255,.35); color:#fff; }
+
+  a{ color: var(--accent-strong); text-decoration: none; }
+  a:hover{ text-decoration: underline; }
+
+  .wrap{ max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  section{ padding: 92px 0; border-top: 1px solid var(--line-soft); }
+  section:first-of-type{ border-top: none; }
+
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:8px;
+    font-size: 12.5px; letter-spacing:.14em; text-transform: uppercase;
+    color: var(--accent-strong); font-weight: 700; margin: 0 0 14px;
+  }
+  .eyebrow::before{ content:""; width:7px; height:7px; border-radius:50%; background: var(--accent); box-shadow: 0 0 0 4px rgba(124,108,255,.16); }
+
+  h1,h2,h3{ font-weight: 750; letter-spacing: -0.02em; margin: 0; }
+  h2{ font-size: clamp(1.7rem, 3vw, 2.3rem); }
+  .section-sub{ color: var(--ink-dim); max-width: 640px; margin: 14px 0 0; font-size: 1.05rem; }
+  .section-head{ margin-bottom: 44px; }
+
+  code{
+    font-family: var(--mono);
+    background: rgba(124,108,255,.12);
+    color: var(--accent-strong);
+    padding: .12em .42em;
+    border-radius: 5px;
+    font-size: .88em;
+    border: 1px solid rgba(124,108,255,.2);
+  }
+
+  /* ---------- nav ---------- */
+  .topnav{
+    position: sticky; top:0; z-index: 50;
+    backdrop-filter: blur(10px);
+    background: rgba(10,11,15,.75);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .topnav .wrap{ display:flex; align-items:center; justify-content:space-between; height: 60px; }
+  .brand{ display:flex; align-items:center; gap:10px; font-weight:800; font-size:1rem; color: var(--ink); }
+  .brand-mark{
+    width:26px; height:26px; border-radius:8px; flex:none;
+    background: linear-gradient(135deg, var(--accent-strong), var(--green));
+    display:inline-flex; align-items:center; justify-content:center; font-size:14px;
+  }
+  .navlinks{ display:flex; gap:22px; font-size:.92rem; }
+  .navlinks a{ color: var(--ink-dim); }
+  .navlinks a:hover{ color: var(--ink); text-decoration:none; }
+  @media (max-width: 720px){ .navlinks{ display:none; } }
+
+  /* ---------- hero ---------- */
+  .hero{ padding: 100px 0 84px; border-top:none; }
+  .hero-grid{ display:grid; grid-template-columns: 1.1fr .9fr; gap: 48px; align-items:center; }
+  @media (max-width: 880px){ .hero-grid{ grid-template-columns: 1fr; } }
+
+  .hero h1{
+    font-size: clamp(2.4rem, 5.2vw, 3.9rem);
+    line-height: 1.05;
+    background: linear-gradient(180deg, #fff, #d9dcf0 65%, var(--ink-dim));
+    -webkit-background-clip: text; background-clip:text; color: transparent;
+  }
+  .hero .tagline{ margin-top: 20px; font-size: clamp(1.05rem, 1.7vw, 1.22rem); color: var(--ink-dim); max-width: 54ch; }
+  .hero .tagline strong{ color: var(--ink); font-weight: 650; }
+  .hero-org{ margin-top: 14px; color: var(--ink-faint); font-size: .95rem; }
+
+  .cta-row{ display:flex; gap:14px; flex-wrap:wrap; margin-top: 32px; align-items:center; }
+  .btn{
+    display:inline-flex; align-items:center; gap:9px;
+    padding: 13px 22px; border-radius: 10px; font-weight: 650; font-size: .96rem;
+    border: 1px solid transparent; transition: transform .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .btn:hover{ text-decoration:none; transform: translateY(-1px); }
+  .btn-primary{ background: var(--accent); color: #fff; }
+  .btn-primary:hover{ background: var(--accent-strong); }
+  .btn-ghost{ background: transparent; color: var(--ink); border-color: var(--line); }
+  .btn-ghost:hover{ border-color: var(--accent-dim); color: var(--accent-strong); }
+
+  .hero-badges{ display:flex; gap:10px; flex-wrap:wrap; margin-top:28px; }
+  .badge{
+    font-size:.78rem; color: var(--ink-faint); border:1px solid var(--line);
+    padding: 5px 11px; border-radius: 999px; font-family: var(--mono);
+  }
+
+  .diagram-panel{
+    background: linear-gradient(160deg, var(--bg-raised), var(--bg-card));
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 26px;
+    box-shadow: 0 30px 60px -30px rgba(0,0,0,.6);
+  }
+  .diagram-panel svg{ display:block; width:100%; height:auto; }
+  .diagram-caption{ text-align:center; color: var(--ink-faint); font-size:.85rem; margin-top: 12px; }
+
+  /* ---------- passos ---------- */
+  .steps{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 820px){ .steps{ grid-template-columns: 1fr; } }
+  .step{
+    background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 26px 24px;
+  }
+  .step-num{
+    display:inline-flex; align-items:center; justify-content:center;
+    width: 30px; height: 30px; border-radius: 9px; margin-bottom: 16px;
+    background: rgba(124,108,255,.15); color: var(--accent-strong);
+    font-weight: 800; font-family: var(--mono);
+  }
+  .step h3{ font-size: 1.05rem; margin-bottom: 8px; }
+  .step p{ color: var(--ink-dim); font-size: .95rem; margin: 0; }
+
+  /* ---------- features ---------- */
+  .features{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 980px){ .features{ grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 640px){ .features{ grid-template-columns: 1fr; } }
+  .feature{
+    background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px 22px;
+    transition: border-color .2s ease, transform .2s ease;
+  }
+  .feature:hover{ border-color: var(--accent-dim); transform: translateY(-2px); }
+  .feature .icon{ font-size: 1.4rem; margin-bottom: 12px; display:block; }
+  .feature h3{ font-size: 1rem; margin-bottom: 7px; }
+  .feature p{ color: var(--ink-dim); font-size: .92rem; margin: 0; }
+
+  /* ---------- instalação ---------- */
+  .installs{ display:grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 880px){ .installs{ grid-template-columns: 1fr; } }
+  .install{
+    background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 26px 24px; display:flex; flex-direction:column; gap: 10px;
+  }
+  .install.recommended{ border-color: var(--accent-dim); position: relative; }
+  .install .tag{
+    position:absolute; top:-11px; left: 20px;
+    background: var(--accent); color:#fff; font-size:.72rem; font-weight:700;
+    padding: 3px 10px; border-radius: 999px; letter-spacing: .06em; text-transform: uppercase;
+  }
+  .install h3{ font-size: 1.02rem; }
+  .install p{ color: var(--ink-dim); font-size: .93rem; margin: 0; flex: 1; }
+  .install .mono-hint{ font-family: var(--mono); font-size: .82rem; color: var(--ink-faint); }
+
+  /* ---------- footer ---------- */
+  footer{
+    border-top: 1px solid var(--line-soft);
+    padding: 40px 0 56px;
+    color: var(--ink-faint); font-size: .9rem;
+  }
+  footer .wrap{ display:flex; justify-content:space-between; gap: 16px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="wrap">
+    <span class="brand"><span class="brand-mark">🪝</span> Webhook Router</span>
+    <div class="navlinks">
+      <a href="#como-funciona">Como funciona</a>
+      <a href="#recursos">Recursos</a>
+      <a href="#instalacao">Instalação</a>
+      <a href="https://github.com/Expert-Integrado/webhook-router" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Open source · Cloudflare Workers</p>
+      <h1>1 webhook,<br>N destinos.</h1>
+      <p class="tagline">
+        Sua plataforma só aceita <strong>um</strong> endereço de webhook — mas você precisa mandar o mesmo evento
+        pro n8n, pro CRM e pro seu sistema. O Webhook Router fica no meio: recebe uma vez e
+        <strong>replica para quantos destinos você quiser</strong>, com retry automático quando algum cair.
+      </p>
+      <p class="hero-org">Um projeto <a href="https://github.com/Expert-Integrado" target="_blank" rel="noopener">Expert Integrado</a>, feito para rodar 100% no plano gratuito da Cloudflare.</p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://deploy.workers.cloudflare.com/?url=https://github.com/Expert-Integrado/webhook-router" target="_blank" rel="noopener">⚡ Instalar em 1 clique</a>
+        <a class="btn btn-ghost" href="https://github.com/Expert-Integrado/webhook-router" target="_blank" rel="noopener">Ver no GitHub</a>
+      </div>
+      <div class="hero-badges">
+        <span class="badge">Cloudflare Workers + D1</span>
+        <span class="badge">100% gratuito</span>
+        <span class="badge">painel em português</span>
+        <span class="badge">MIT</span>
+      </div>
+    </div>
+    <div>
+      <div class="diagram-panel">
+        <svg viewBox="0 0 440 300" role="img" aria-label="Diagrama: uma plataforma envia um webhook para o roteador, que replica para três destinos">
+          <defs>
+            <linearGradient id="lg" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0" stop-color="#7c6cff"/><stop offset="1" stop-color="#34d399"/>
+            </linearGradient>
+            <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 8 5 L 0 9 z" fill="#5f6578"/>
+            </marker>
+          </defs>
+          <!-- origem -->
+          <rect x="10" y="120" width="108" height="60" rx="12" fill="#10121a" stroke="#262b3b"/>
+          <text x="64" y="146" text-anchor="middle" fill="#9aa0b4" font-size="13" font-family="system-ui">Z-API,</text>
+          <text x="64" y="164" text-anchor="middle" fill="#9aa0b4" font-size="13" font-family="system-ui">Stripe, etc.</text>
+          <!-- router -->
+          <rect x="170" y="112" width="112" height="76" rx="14" fill="#151824" stroke="url(#lg)" stroke-width="1.5"/>
+          <text x="226" y="143" text-anchor="middle" fill="#eef0f6" font-size="20" font-family="system-ui">🪝</text>
+          <text x="226" y="168" text-anchor="middle" fill="#9285ff" font-size="12.5" font-weight="700" font-family="system-ui">Webhook Router</text>
+          <!-- destinos -->
+          <rect x="336" y="26" width="94" height="48" rx="10" fill="#10121a" stroke="#262b3b"/>
+          <text x="383" y="55" text-anchor="middle" fill="#9aa0b4" font-size="12.5" font-family="system-ui">n8n</text>
+          <rect x="336" y="126" width="94" height="48" rx="10" fill="#10121a" stroke="#262b3b"/>
+          <text x="383" y="155" text-anchor="middle" fill="#9aa0b4" font-size="12.5" font-family="system-ui">CRM</text>
+          <rect x="336" y="226" width="94" height="48" rx="10" fill="#10121a" stroke="#262b3b"/>
+          <text x="383" y="255" text-anchor="middle" fill="#9aa0b4" font-size="12.5" font-family="system-ui">Planilha</text>
+          <!-- setas -->
+          <line x1="118" y1="150" x2="164" y2="150" stroke="#5f6578" stroke-width="2" marker-end="url(#arr)"/>
+          <path d="M282 132 C 310 110, 310 70, 330 54" fill="none" stroke="#7c6cff" stroke-width="2" marker-end="url(#arr)"/>
+          <line x1="282" y1="150" x2="330" y2="150" stroke="#9285ff" stroke-width="2" marker-end="url(#arr)"/>
+          <path d="M282 168 C 310 190, 310 230, 330 246" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arr)"/>
+          <!-- rotulo -->
+          <text x="226" y="212" text-anchor="middle" fill="#5f6578" font-size="11" font-family="ui-monospace, monospace">mesmo método · headers · query · body</text>
+        </svg>
+        <p class="diagram-caption">A plataforma envia 1 vez — todos os destinos recebem a cópia fiel.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="como-funciona">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Como funciona</p>
+      <h2>Três passos e está rodando</h2>
+      <p class="section-sub">Sem servidor pra manter, sem mensalidade. O roteador vive na sua conta gratuita da Cloudflare — os dados são seus.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <h3>Crie um endpoint no painel</h3>
+        <p>Cada endpoint ganha uma URL secreta do tipo <code>/in/{token}</code>. Copie e cole no campo de webhook da sua plataforma (Z-API, Stripe, Hotmart…).</p>
+      </div>
+      <div class="step">
+        <span class="step-num">2</span>
+        <h3>Cadastre os destinos</h3>
+        <p>Adicione quantas URLs quiser — n8n, Make, CRM, sistema próprio. Teste cada uma com 1 clique antes de conectar a origem.</p>
+      </div>
+      <div class="step">
+        <span class="step-num">3</span>
+        <h3>Pronto — ele replica tudo</h3>
+        <p>Cada evento chega idêntico em todos os destinos: mesmo método, headers, query e body. Se um destino cair, o retry automático insiste por horas.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="recursos">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Recursos</p>
+      <h2>Pequeno por fora, completo por dentro</h2>
+    </div>
+    <div class="features">
+      <div class="feature">
+        <span class="icon">🔁</span>
+        <h3>Retry automático</h3>
+        <p>Destino fora do ar? Reenvia com backoff (1 min → 6 h, até 5 tentativas) e ainda permite reenvio manual pelo painel.</p>
+      </div>
+      <div class="feature">
+        <span class="icon">🔏</span>
+        <h3>Assinatura HMAC</h3>
+        <p>Toda entrega sai assinada (HMAC-SHA256). O destino confirma que o webhook veio do seu roteador — com snippet pronto para n8n.</p>
+      </div>
+      <div class="feature">
+        <span class="icon">🎯</span>
+        <h3>Filtro e transformação</h3>
+        <p>Por destino: encaminhe só os eventos que interessam (ex.: só mensagens recebidas) e remodele o payload se precisar.</p>
+      </div>
+      <div class="feature">
+        <span class="icon">🕘</span>
+        <h3>Histórico com replay</h3>
+        <p>7 dias de eventos com headers e body completos. Filtre por status e data, inspecione e reenvie com um clique.</p>
+      </div>
+      <div class="feature">
+        <span class="icon">🇧🇷</span>
+        <h3>Painel em português</h3>
+        <p>Interface dark, direta e pensada para não-técnicos — feita para os alunos da mentoria usarem sem medo.</p>
+      </div>
+      <div class="feature">
+        <span class="icon">🔔</span>
+        <h3>Avisa quando tem update</h3>
+        <p>O painel compara sua versão com o repositório oficial e mostra o passo a passo de atualização do seu jeito de instalar.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="instalacao">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Instalação</p>
+      <h2>Escolha seu caminho</h2>
+      <p class="section-sub">Os três levam ao mesmo lugar: o roteador publicado na <em>sua</em> conta Cloudflare, de graça.</p>
+    </div>
+    <div class="installs">
+      <div class="install recommended">
+        <span class="tag">Sem terminal</span>
+        <h3>⚡ Botão de 1 clique</h3>
+        <p>Clique, faça login na Cloudflare e pronto — o fluxo clona o projeto, cria o banco e publica sozinho. Só falta você definir a senha do painel.</p>
+        <a class="btn btn-primary" href="https://deploy.workers.cloudflare.com/?url=https://github.com/Expert-Integrado/webhook-router" target="_blank" rel="noopener">Deploy to Cloudflare</a>
+      </div>
+      <div class="install">
+        <h3>🤖 Com Claude Code</h3>
+        <p>Abra o Claude Code na pasta do projeto e diga <strong>“instale o webhook router”</strong>. Ele executa tudo e só pede sua ajuda no login e na senha.</p>
+        <span class="mono-hint">runbook incluso no repo (CLAUDE.md)</span>
+      </div>
+      <div class="install">
+        <h3>⌨️ Manual, passo a passo</h3>
+        <p>Seis comandos documentados um a um, com o resultado esperado de cada — para quem quer entender o que está acontecendo.</p>
+        <a class="btn btn-ghost" href="https://github.com/Expert-Integrado/webhook-router#caminho-c--instala%C3%A7%C3%A3o-manual-passo-a-passo" target="_blank" rel="noopener">Ver o guia completo</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 <a href="https://github.com/Expert-Integrado" target="_blank" rel="noopener">Expert Integrado</a> · Licença MIT</span>
+    <span><a href="https://github.com/Expert-Integrado/webhook-router" target="_blank" rel="noopener">github.com/Expert-Integrado/webhook-router</a> · <a href="https://expert-integrado.github.io/" target="_blank" rel="noopener">outros projetos</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

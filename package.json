@@ -1,0 +1,23 @@
+{
+  "name": "webhook-router-exp",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler d1 migrations apply webhook-router --remote && wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "wrangler d1 migrations apply webhook-router --local"
+  },
+  "dependencies": {
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.5",
+    "@cloudflare/workers-types": "^5.20260710.1",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.111.0"
+  }
+}
