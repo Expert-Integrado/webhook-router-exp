@@ -1,5 +1,7 @@
 # Webhook Router
 
+Open source, criado por **Eric Luciano** na **Mentoria Automações Inteligentes** (Expert Integrado).
+
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Expert-Integrado/webhook-router)
 
 🌐 **Página do projeto:** [expert-integrado.github.io/webhook-router](https://expert-integrado.github.io/webhook-router/)
